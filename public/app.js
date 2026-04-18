@@ -2,7 +2,7 @@ const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
 
 const state = {
-  user: JSON.parse(localStorage.getItem('argos_user') || 'null'),
+  user: null,
   cart: JSON.parse(localStorage.getItem('argos_cart_v6') || localStorage.getItem('argos_cart_v4') || '[]'),
   balance: Number(localStorage.getItem('argos_balance') || 0),
   boxesOwned: Number(localStorage.getItem('argos_boxes_owned') || 0),
@@ -30,6 +30,82 @@ const SERVER_BASE_URL = (APP_CONFIG.app?.serverBaseUrl && !/localhost/i.test(APP
 const DISCORD_INVITE = APP_CONFIG.links?.discordInvite || 'https://discord.gg/mtzEFsTJYw';
 
 
+function getDiscordBrowserAuth(){
+  try { return JSON.parse(localStorage.getItem('argos_discord_auth') || 'null'); }
+  catch { return null; }
+}
+function buildUserFromDiscordAuth(auth){
+  const user = auth?.user;
+  if(!user?.id) return null;
+  return {
+    name: user.global_name || user.username || 'Player Argos',
+    discordUser: user.username || 'discordplayer',
+    discordTag: user.discriminator && user.discriminator !== '0' ? user.discriminator : user.id,
+    role: 'Player Argos',
+    joined: String(new Date().getFullYear()),
+    avatar: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256` : buildInitials(user.global_name || user.username || 'Argos'),
+    discordId: user.id,
+    email: user.email || '',
+    gameLink: JSON.parse(localStorage.getItem('argos_game_link') || '{"gameId":"","code":"","status":"idle","confirmed":false,"requestedAt":"","confirmedAt":""}')
+  };
+}
+(function hydrateUserFromBrowserAuth(){
+  const auth = getDiscordBrowserAuth();
+  if(auth?.user?.id){
+    const built = buildUserFromDiscordAuth(auth);
+    if(built){
+      state.user = built;
+      localStorage.setItem('argos_user', JSON.stringify(built));
+    }
+  } else {
+    try { state.user = JSON.parse(localStorage.getItem('argos_user') || 'null'); } catch { state.user = null; }
+  }
+})();
+async function tryDiscordOAuthCallback(){
+  if(location.pathname.split('/').pop() !== 'login.html') return;
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const token = hash.get('access_token');
+  if(!token) return;
+  const stateHash = hash.get('state');
+  const savedState = sessionStorage.getItem('argos_discord_state');
+  const notice = document.querySelector('.notice');
+  if(savedState && stateHash !== savedState){
+    if(notice) notice.textContent = 'Falha ao concluir login: state inválido.';
+    return;
+  }
+  try {
+    const res = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch {}
+    if(!res.ok || !data?.id) throw new Error(data?.message || 'Falha ao obter conta Discord.');
+    const payload = {
+      token,
+      tokenType: hash.get('token_type') || 'Bearer',
+      expiresIn: Number(hash.get('expires_in') || 0),
+      scope: hash.get('scope') || '',
+      user: data,
+      savedAt: Date.now()
+    };
+    localStorage.setItem('argos_discord_auth', JSON.stringify(payload));
+    const built = buildUserFromDiscordAuth(payload);
+    state.user = built;
+    localStorage.setItem('argos_user', JSON.stringify(built));
+    sessionStorage.removeItem('argos_discord_state');
+    history.replaceState({}, document.title, location.pathname);
+    const redirectTo = localStorage.getItem('argos_redirect_after_login') || 'dashboard.html';
+    localStorage.removeItem('argos_redirect_after_login');
+    if(notice) notice.textContent = 'Login concluído. Redirecionando para sua conta...';
+    setTimeout(()=> location.href = redirectTo, 600);
+  } catch (err) {
+    if(notice) notice.textContent = err.message || 'Falha ao concluir login com Discord.';
+  }
+}
+
+
+
 function ensureUserShape(){
   if(!state.user) return;
   state.user = {
@@ -54,6 +130,7 @@ ensureUserShape();
 function saveState(){
   ensureUserShape();
   localStorage.setItem('argos_user', JSON.stringify(state.user));
+  localStorage.setItem('argos_game_link', JSON.stringify(state.user?.gameLink || { gameId:'', code:'', status:'idle', confirmed:false, requestedAt:'', confirmedAt:'' }));
   localStorage.setItem('argos_cart_v6', JSON.stringify(state.cart));
   localStorage.setItem('argos_balance', String(state.balance));
   localStorage.setItem('argos_boxes_owned', String(state.boxesOwned));
@@ -108,6 +185,9 @@ function setHeader(){
       `;
       $('#logoutBtn')?.addEventListener('click', ()=>{
         state.user = null;
+        localStorage.removeItem('argos_user');
+        localStorage.removeItem('argos_discord_auth');
+        localStorage.removeItem('argos_game_link');
         saveState();
         location.href = 'index.html';
       });
@@ -171,7 +251,24 @@ function renderQuickData(){
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
   oauthBtn?.addEventListener('click', () => {
-    location.href = `${SERVER_BASE_URL}/auth/discord/login?next=` + encodeURIComponent('/dashboard.html');
+    const clientId = APP_CONFIG.discord?.clientId;
+    const redirectUri = APP_CONFIG.discord?.redirectUri || `${window.location.origin}/login.html`;
+    const scope = APP_CONFIG.discord?.scope || 'identify email';
+    if(!clientId){
+      alert('Client ID do Discord não configurado no config.js');
+      return;
+    }
+    const stateValue = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    sessionStorage.setItem('argos_discord_state', stateValue);
+    const next = localStorage.getItem('argos_redirect_after_login') || 'dashboard.html';
+    localStorage.setItem('argos_redirect_after_login', next);
+    const authUrl = new URL('https://discord.com/oauth2/authorize');
+    authUrl.searchParams.set('response_type', 'token');
+    authUrl.searchParams.set('client_id', clientId);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('scope', scope);
+    authUrl.searchParams.set('state', stateValue);
+    window.location.href = authUrl.toString();
   });
 }
 

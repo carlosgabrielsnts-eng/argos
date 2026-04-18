@@ -5,7 +5,7 @@ window.CONFIG = {
   },
   discord: {
     clientId: "1489509789305405600",
-    redirectUri: `${window.location.origin}/auth/discord/callback`,
+    redirectUri: `${window.location.origin}/login.html`,
     scope: "identify email"
   },
   mercadopago: {
