@@ -1,11 +1,11 @@
 window.CONFIG = {
   app: {
     name: "Argos RJ",
-    serverBaseUrl: "https://argosrj.onrender.com"
+    serverBaseUrl: window.location.origin
   },
   discord: {
     clientId: "1489509789305405600",
-    redirectUri: "http://argosrj.onrender.com/auth/discord/callback",
+    redirectUri: `${window.location.origin}/auth/discord/callback`,
     scope: "identify email"
   },
   mercadopago: {

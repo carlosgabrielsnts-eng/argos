@@ -32,7 +32,7 @@ const DISCORD_OAUTH = {
 };
 const MERCADO_PAGO_CONFIG = APP_CONFIG.mercadopago || {};
 const FIREBASE_CONFIG = APP_CONFIG.firebase || {};
-const SERVER_BASE_URL = APP_CONFIG.app?.serverBaseUrl || location.origin;
+const SERVER_BASE_URL = (APP_CONFIG.app?.serverBaseUrl && !/localhost/i.test(APP_CONFIG.app.serverBaseUrl) ? APP_CONFIG.app.serverBaseUrl : location.origin);
 const DISCORD_INVITE = APP_CONFIG.links?.discordInvite || 'https://discord.gg/mtzEFsTJYw';
 
 function randomState(size=24){
@@ -244,7 +244,7 @@ function renderQuickData(){
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
   oauthBtn?.addEventListener('click', () => {
-    location.href = `${SERVER_BASE_URL}/auth/discord/login`;
+    location.href = `${SERVER_BASE_URL}/auth/discord/login?next=${encodeURIComponent('/dashboard.html')}`;
   });
 }
 

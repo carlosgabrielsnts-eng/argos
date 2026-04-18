@@ -2,8 +2,11 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const app = express();
+app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
@@ -12,31 +15,36 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({ links: {}, orders: [] }, null, 2));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static(PUBLIC_DIR));
+
 const readDb = () => JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
 const writeDb = (db) => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-const appBaseUrl = (req) => (process.env.APP_BASE_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
-const discordRedirectUri = (req) => (process.env.DISCORD_REDIRECT_URI || `${appBaseUrl(req)}/auth/discord/callback`).replace(/\/$/, '');
 
-async function parseMaybeJson(response) {
-  const contentType = response.headers.get('content-type') || '';
-  const text = await response.text();
-  if (contentType.includes('application/json')) {
-    try {
-      return { raw: text, data: JSON.parse(text) };
-    } catch {
-      return { raw: text, data: null };
-    }
+function normalizeBaseUrl(raw, req) {
+  let value = (raw || '').trim();
+  if (!value) {
+    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+    value = `${proto}://${req.get('host')}`;
   }
-  try {
-    return { raw: text, data: JSON.parse(text) };
-  } catch {
-    return { raw: text, data: null };
-  }
+  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
+  const url = new URL(value);
+  const isLocal = /^(localhost|127\.0\.0\.1)$/i.test(url.hostname);
+  if (!isLocal) url.protocol = 'https:';
+  return url.toString().replace(/\/$/, '');
 }
 
-function escapeHtml(str = '') {
-  return String(str)
+function getBaseUrl(req) {
+  return normalizeBaseUrl(process.env.APP_BASE_URL, req);
+}
+
+function getRedirectUri(req) {
+  const raw = process.env.DISCORD_REDIRECT_URI || `${getBaseUrl(req)}/auth/discord/callback`;
+  return normalizeBaseUrl(raw, req);
+}
+
+function htmlEscape(value = '') {
+  return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -44,129 +52,131 @@ function escapeHtml(str = '') {
     .replace(/'/g, '&#39;');
 }
 
-function renderAuthError(res, title, details) {
-  res.status(400).send(`<!DOCTYPE html>
+function renderMessagePage(title, message, extra = '') {
+  return `<!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Erro no login Discord</title>
-  <style>
-    body{margin:0;font-family:Inter,Arial,sans-serif;background:#0c0f16;color:#f2f4f8;display:grid;place-items:center;min-height:100vh;padding:24px}
-    .box{width:min(720px,100%);background:#131927;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-    h1{margin:0 0 12px;font-size:28px}.muted{color:#b3bdd1;line-height:1.6}
-    pre{white-space:pre-wrap;word-break:break-word;background:#0b1120;border-radius:14px;padding:16px;border:1px solid rgba(255,255,255,.08);color:#ffd6d6}
-    a{color:#ff8a3d;text-decoration:none;font-weight:700}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${htmlEscape(title)}</title>
+<style>
+body{margin:0;font-family:Inter,Arial,sans-serif;background:#0d0f14;color:#f2f4f8;display:grid;min-height:100vh;place-items:center;padding:24px}
+.box{width:min(720px,100%);background:#141925;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+h1{margin:0 0 12px;font-size:28px}p{margin:0 0 10px;color:#c7cfdb;line-height:1.6}.muted{font-size:13px;color:#8d99ae}.code{margin-top:16px;padding:14px;border-radius:14px;background:#0b0f18;border:1px solid rgba(255,255,255,.08);white-space:pre-wrap;word-break:break-word;color:#ffcf99}.btn{display:inline-block;margin-top:16px;padding:12px 16px;border-radius:12px;background:#ff7a18;color:#111;text-decoration:none;font-weight:700}
+</style>
 </head>
-<body>
-  <div class="box">
-    <h1>${escapeHtml(title)}</h1>
-    <p class="muted">O Discord respondeu de um jeito que o servidor não conseguiu concluir o login. Veja o detalhe abaixo e confira o <strong>Render Logs</strong>.</p>
-    <pre>${escapeHtml(details)}</pre>
-    <p class="muted"><a href="/login.html">Voltar para o login</a></p>
-  </div>
-</body>
-</html>`);
+<body><div class="box"><h1>${htmlEscape(title)}</h1><p>${htmlEscape(message)}</p>${extra}</div></body></html>`;
+}
+
+async function readJsonSafe(response) {
+  const text = await response.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { text, json };
 }
 
 app.get('/api/server/status', async (req, res) => {
   try {
     if (process.env.STATUS_API_URL) {
       const response = await fetch(process.env.STATUS_API_URL);
-      const { data } = await parseMaybeJson(response);
-      if (!response.ok) return res.status(502).json({ error: 'Falha ao consultar API de status.' });
-      return res.json(data || {});
+      const data = await response.json();
+      return res.json(data);
     }
     return res.json({ online: false, message: 'STATUS_API_URL não configurada', players: { current: 0, max: 0 } });
-  } catch (error) {
-    return res.status(500).json({ error: 'Falha ao consultar status do servidor.', details: error.message });
+  } catch {
+    return res.status(500).json({ error: 'Falha ao consultar status do servidor.' });
   }
 });
 
 app.get('/auth/discord/login', (req, res) => {
-  const clientId = process.env.DISCORD_CLIENT_ID;
-  const redirectUri = discordRedirectUri(req);
-  if (!clientId) return res.status(400).send('Configure DISCORD_CLIENT_ID no .env');
-  const url = new URL('https://discord.com/api/oauth2/authorize');
+  const clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
+  if (!clientId) return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID no ambiente do servidor.'));
+
+  const state = crypto.randomBytes(16).toString('hex');
+  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/dashboard.html';
+  res.cookie?.('argos_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
+  res.cookie?.('argos_oauth_next', next, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
+
+  const url = new URL('https://discord.com/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'identify email');
-  url.searchParams.set('redirect_uri', redirectUri);
+  url.searchParams.set('redirect_uri', getRedirectUri(req));
+  url.searchParams.set('state', state);
   url.searchParams.set('prompt', 'consent');
   res.redirect(url.toString());
 });
 
 app.get('/auth/discord/callback', async (req, res) => {
+  const code = req.query.code;
+  const error = req.query.error;
+  const errorDescription = req.query.error_description;
+  if (error) {
+    return res.status(400).send(renderMessagePage('Discord recusou o login', errorDescription || error));
+  }
+  if (!code) {
+    return res.status(400).send(renderMessagePage('Código ausente', 'O Discord não retornou o código de autorização.'));
+  }
+
+  const clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
+  const clientSecret = (process.env.DISCORD_CLIENT_SECRET || '').trim();
+  const redirectUri = getRedirectUri(req);
+  if (!clientId || !clientSecret) {
+    return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID e DISCORD_CLIENT_SECRET no ambiente do servidor.'));
+  }
+
   try {
-    const code = req.query.code;
-    if (!code) return renderAuthError(res, 'Código do Discord não recebido', 'A URL de retorno não trouxe o parâmetro "code".');
-
-    const clientId = process.env.DISCORD_CLIENT_ID;
-    const clientSecret = process.env.DISCORD_CLIENT_SECRET;
-    const redirectUri = discordRedirectUri(req);
-
-    if (!clientId || !clientSecret) {
-      return renderAuthError(res, 'Variáveis do Discord ausentes', 'Configure DISCORD_CLIENT_ID e DISCORD_CLIENT_SECRET no .env do Render.');
-    }
-
-    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${basicAuth}`
+      },
       body: new URLSearchParams({
-        client_id: clientId,
-        client_secret: clientSecret,
         grant_type: 'authorization_code',
-        code,
+        code: String(code),
         redirect_uri: redirectUri
       })
     });
 
-    const tokenParsed = await parseMaybeJson(tokenRes);
-    if (!tokenRes.ok) {
-      const details = tokenParsed.data
-        ? JSON.stringify(tokenParsed.data, null, 2)
-        : `Resposta não JSON do Discord ao trocar token (status ${tokenRes.status}). Primeiros caracteres: ${tokenParsed.raw.slice(0, 500)}`;
-      console.error('Discord token error:', details);
-      return renderAuthError(res, 'Falha ao trocar code por token', details);
-    }
-
-    if (!tokenParsed.data?.access_token) {
-      const details = tokenParsed.raw || 'Discord não retornou access_token.';
-      console.error('Discord token missing access_token:', details);
-      return renderAuthError(res, 'Token do Discord ausente', details);
+    const tokenParsed = await readJsonSafe(tokenRes);
+    if (!tokenRes.ok || !tokenParsed.json?.access_token) {
+      const detail = tokenParsed.json ? JSON.stringify(tokenParsed.json) : tokenParsed.text.slice(0, 500);
+      return res.status(400).send(renderMessagePage(
+        'Falha ao concluir login',
+        'O Discord não aceitou a troca do código por token.',
+        `<div class="code">${htmlEscape(detail || 'Resposta vazia do Discord.')}</div><div class="muted">Confira APP_BASE_URL, DISCORD_REDIRECT_URI, CLIENT_ID e CLIENT_SECRET.</div>`
+      ));
     }
 
     const meRes = await fetch('https://discord.com/api/v10/users/@me', {
-      headers: { Authorization: `Bearer ${tokenParsed.data.access_token}` }
+      headers: { Authorization: `Bearer ${tokenParsed.json.access_token}` }
     });
-    const meParsed = await parseMaybeJson(meRes);
-    if (!meRes.ok) {
-      const details = meParsed.data ? JSON.stringify(meParsed.data, null, 2) : meParsed.raw;
-      console.error('Discord me error:', details);
-      return renderAuthError(res, 'Falha ao obter usuário do Discord', details);
+    const meParsed = await readJsonSafe(meRes);
+    if (!meRes.ok || !meParsed.json?.id) {
+      const detail = meParsed.json ? JSON.stringify(meParsed.json) : meParsed.text.slice(0, 500);
+      return res.status(400).send(renderMessagePage('Falha ao obter conta Discord', 'O token foi gerado, mas a leitura do perfil falhou.', `<div class="code">${htmlEscape(detail || 'Resposta vazia da API do Discord.')}</div>`));
     }
 
-    const me = meParsed.data || {};
+    const me = meParsed.json;
     const payload = {
       name: me.global_name || me.username,
       discordUser: me.username,
       discordTag: me.discriminator && me.discriminator !== '0' ? me.discriminator : me.id,
       role: 'Player Argos',
       joined: String(new Date().getFullYear()),
-      avatar: me.avatar
-        ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256`
-        : ((me.global_name || me.username || 'AR').slice(0, 2).toUpperCase()),
+      avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : ((me.global_name || me.username || 'AR').slice(0, 2).toUpperCase()),
       discordId: me.id,
       email: me.email || '',
       gameLink: { gameId: '', code: '', status: 'idle', confirmed: false, requestedAt: '', confirmedAt: '' }
     };
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!DOCTYPE html><html><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.href='/dashboard.html';</script></body></html>`);
-  } catch (error) {
-    console.error('Discord callback fatal error:', error);
-    renderAuthError(res, 'Falha ao concluir login', error.message || 'Erro interno desconhecido.');
+    res.end(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrando...</title></head><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.replace('/dashboard.html');</script></body></html>`);
+  } catch (err) {
+    console.error('Discord OAuth callback error:', err);
+    res.status(500).send(renderMessagePage('Falha ao concluir login', 'O servidor encontrou um erro durante o login com Discord.', `<div class="code">${htmlEscape(err?.message || 'Erro desconhecido.')}</div>`));
   }
 });
 
@@ -174,16 +184,7 @@ app.post('/api/game-link/request', (req, res) => {
   const { discordId, discordUser, gameId } = req.body || {};
   if (!discordId || !gameId) return res.status(400).json({ error: 'discordId e gameId são obrigatórios.' });
   const db = readDb();
-  const link = {
-    discordId,
-    discordUser: discordUser || '',
-    gameId: String(gameId),
-    code: `ARGOS-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-    status: 'pending',
-    confirmed: false,
-    requestedAt: new Date().toISOString(),
-    confirmedAt: ''
-  };
+  const link = { discordId, discordUser: discordUser || '', gameId: String(gameId), code: `ARGOS-${Math.random().toString(36).slice(2, 8).toUpperCase()}`, status: 'pending', confirmed: false, requestedAt: new Date().toISOString(), confirmedAt: '' };
   db.links[discordId] = link;
   writeDb(db);
   res.json({ ok: true, link });
@@ -209,82 +210,32 @@ app.post('/api/payments/create-preference', async (req, res) => {
     const discount = coupon?.code === 'ARGOS50' ? subtotal * 0.5 : 0;
     const total = Math.max(0, subtotal - discount);
     const db = readDb();
-    const order = {
-      id: `ARG-${Date.now()}`,
-      discordId: user.discordId,
-      discordUser: user.discordUser,
-      gameId: user.gameLink.gameId,
-      email,
-      items,
-      coupon: coupon?.code || null,
-      subtotal,
-      discount,
-      total,
-      method: method || 'mercadopago',
-      status: 'pending_payment',
-      createdAt: new Date().toISOString()
-    };
-    db.orders.unshift(order);
-    writeDb(db);
+    const order = { id: `ARG-${Date.now()}`, discordId: user.discordId, discordUser: user.discordUser, gameId: user.gameLink.gameId, email, items, coupon: coupon?.code || null, subtotal, discount, total, method: method || 'mercadopago', status: 'pending_payment', createdAt: new Date().toISOString() };
+    db.orders.unshift(order); writeDb(db);
 
-    const accessToken = process.env.MP_ACCESS_TOKEN;
-    if (!accessToken) {
-      return res.json({ ok: true, orderId: order.id, message: 'Pedido salvo. Configure MP_ACCESS_TOKEN no .env para gerar o pagamento real.' });
-    }
+    const accessToken = (process.env.MP_ACCESS_TOKEN || '').trim();
+    if (!accessToken) return res.json({ ok: true, orderId: order.id, message: 'Pedido salvo. Configure MP_ACCESS_TOKEN no ambiente para gerar o pagamento real.' });
 
-    const preferenceItems = items.map((item) => ({
-      title: item.name,
-      quantity: 1,
-      unit_price: Number(item.price || 0),
-      currency_id: 'BRL'
-    }));
-    if (discount > 0) {
-      preferenceItems.push({
-        title: `Cupom ${coupon.code}`,
-        quantity: 1,
-        unit_price: -Number(discount.toFixed(2)),
-        currency_id: 'BRL'
-      });
-    }
+    const preferenceItems = items.map((item) => ({ title: item.name, quantity: 1, unit_price: Number(item.price || 0), currency_id: 'BRL' }));
+    if (discount > 0) preferenceItems.push({ title: `Cupom ${coupon.code}`, quantity: 1, unit_price: -Number(discount.toFixed(2)), currency_id: 'BRL' });
 
     const prefRes = await fetch('https://api.mercadopago.com/checkout/preferences', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${accessToken}`
-      },
-      body: JSON.stringify({
-        items: preferenceItems,
-        payer: { email },
-        external_reference: order.id,
-        back_urls: {
-          success: `${appBaseUrl(req)}/checkout.html#resumo-final`,
-          failure: `${appBaseUrl(req)}/checkout.html#pagamento`,
-          pending: `${appBaseUrl(req)}/checkout.html#resumo-final`
-        },
-        auto_return: 'approved'
-      })
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+      body: JSON.stringify({ items: preferenceItems, payer: { email }, external_reference: order.id, back_urls: { success: `${getBaseUrl(req)}/checkout.html#resumo-final`, failure: `${getBaseUrl(req)}/checkout.html#pagamento`, pending: `${getBaseUrl(req)}/checkout.html#resumo-final` }, auto_return: 'approved' })
     });
-
-    const prefParsed = await parseMaybeJson(prefRes);
-    if (!prefRes.ok) {
-      return res.status(400).json({
-        error: prefParsed.data?.message || 'Falha ao criar preferência Mercado Pago.',
-        details: prefParsed.data || prefParsed.raw
-      });
-    }
-
-    res.json({
-      ok: true,
-      orderId: order.id,
-      init_point: prefParsed.data?.init_point,
-      sandbox_init_point: prefParsed.data?.sandbox_init_point
-    });
-  } catch (error) {
-    console.error('Mercado Pago error:', error);
-    res.status(500).json({ error: 'Falha ao criar pagamento.', details: error.message });
+    const prefParsed = await readJsonSafe(prefRes);
+    if (!prefRes.ok) return res.status(400).json({ error: prefParsed.json?.message || 'Falha ao criar preferência Mercado Pago.', details: prefParsed.json || prefParsed.text });
+    res.json({ ok: true, orderId: order.id, init_point: prefParsed.json.init_point, sandbox_init_point: prefParsed.json.sandbox_init_point });
+  } catch (err) {
+    console.error('Mercado Pago error:', err);
+    res.status(500).json({ error: 'Falha ao criar pagamento.' });
   }
 });
 
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, baseUrl: getBaseUrl(req), redirectUri: getRedirectUri(req) });
+});
+
 app.get('*', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-app.listen(PORT, () => console.log(`Argos RJ rodando em http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`Argos RJ rodando na porta ${PORT}`));
