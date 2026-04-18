@@ -25,9 +25,9 @@ const weightedPool = ['rare','rare','rare','rare','epic','epic','epic','legendar
 
 const APP_CONFIG = window.CONFIG || {};
 const DISCORD_OAUTH = {
-  clientId: APP_CONFIG.discord?.clientId || 'COLOQUE_SEU_CLIENT_ID',
-  redirectUri: APP_CONFIG.discord?.redirectUri || `${location.origin}/auth/discord/callback`,
-  scope: APP_CONFIG.discord?.scope || 'identify email',
+  clientId: localStorage.getItem('argos_discord_client_id') || APP_CONFIG.discord?.clientId || 'COLOQUE_SEU_CLIENT_ID',
+  redirectUri: localStorage.getItem('argos_discord_redirect_uri') || APP_CONFIG.discord?.redirectUri || `${location.origin}${location.pathname.includes('login.html') ? location.pathname : location.pathname.replace(/[^/]*$/, 'login.html')}`,
+  scope: APP_CONFIG.discord?.scope || 'identify',
   apiBase: 'https://discord.com/api/v10'
 };
 const MERCADO_PAGO_CONFIG = APP_CONFIG.mercadopago || {};
@@ -42,11 +42,14 @@ function randomState(size=24){
   return out;
 }
 function getDiscordAuthorizeUrl(){
-  const url = new URL('https://discord.com/api/oauth2/authorize');
-  url.searchParams.set('response_type', 'code');
+  const stateToken = randomState();
+  localStorage.setItem('argos_discord_oauth_state', stateToken);
+  const url = new URL('https://discord.com/oauth2/authorize');
+  url.searchParams.set('response_type', 'token');
   url.searchParams.set('client_id', DISCORD_OAUTH.clientId);
   url.searchParams.set('scope', DISCORD_OAUTH.scope);
   url.searchParams.set('redirect_uri', DISCORD_OAUTH.redirectUri);
+  url.searchParams.set('state', stateToken);
   url.searchParams.set('prompt', 'consent');
   return url.toString();
 }
