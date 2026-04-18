@@ -20,3 +20,8 @@ LOGIN DISCORD:
 - No Discord Developer Portal, configure a Redirect URL exatamente como: http://argosrj.onrender.com/login.html
 - O Client ID já está preenchido em public/config.js.
 - Não use callback.html nesta versão.
+
+
+Correção v16.1:
+- Corrigido erro de inicialização do app.js (função ausente)
+- Login Discord com fallback por link direto

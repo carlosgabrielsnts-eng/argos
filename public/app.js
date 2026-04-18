@@ -177,6 +177,11 @@ function createDiscordState(){
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+
+function tryDiscordOAuthCallback(){
+  return finishDiscordImplicitLoginFromHash();
+}
+
 async function finishDiscordImplicitLoginFromHash(){
   if(!location.pathname.endsWith('/login.html') && !location.pathname.endsWith('login.html')) return;
   const redirectHint = $('#redirectHint');
@@ -243,19 +248,23 @@ async function finishDiscordImplicitLoginFromHash(){
 
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
-  oauthBtn?.addEventListener('click', () => {
-    const stateValue = createDiscordState();
-    sessionStorage.setItem('argos_discord_state', stateValue);
-    sessionStorage.setItem('argos_login_next', '/dashboard.html');
-    const url = new URL('https://discord.com/oauth2/authorize');
-    url.searchParams.set('response_type', 'token');
-    url.searchParams.set('client_id', CONFIG.discord.clientId);
-    url.searchParams.set('redirect_uri', CONFIG.discord.redirectUri);
-    url.searchParams.set('scope', CONFIG.discord.scope || 'identify email');
-    url.searchParams.set('state', stateValue);
-    url.searchParams.set('prompt', 'consent');
-    location.href = url.toString();
-  });
+  const nextPath = localStorage.getItem('argos_redirect_after_login') || '/dashboard.html';
+
+  if(oauthBtn){
+    oauthBtn.addEventListener('click', () => {
+      const stateValue = createDiscordState();
+      sessionStorage.setItem('argos_discord_state', stateValue);
+      sessionStorage.setItem('argos_login_next', nextPath.startsWith('/') ? nextPath : `/${nextPath}`);
+      const url = new URL('https://discord.com/oauth2/authorize');
+      url.searchParams.set('response_type', 'token');
+      url.searchParams.set('client_id', CONFIG.discord.clientId);
+      url.searchParams.set('redirect_uri', CONFIG.discord.redirectUri);
+      url.searchParams.set('scope', CONFIG.discord.scope || 'identify email');
+      url.searchParams.set('state', stateValue);
+      url.searchParams.set('prompt', 'consent');
+      window.location.assign(url.toString());
+    });
+  }
 
   finishDiscordImplicitLoginFromHash();
 }
@@ -902,14 +911,18 @@ if(document.body.dataset.private === 'true' && !isLogged()){
   location.href = 'login.html';
 }
 
-setHeader();
-renderQuickData();
-tryDiscordOAuthCallback();
-setupServerStatus();
-setupLogin();
-setupShop();
-setupInventory();
-setupCases();
-setupLinking();
-setupCheckout();
-setupDashboard();
+function safeRun(fn){
+  try { fn(); } catch(err){ console.error('Argos init error:', err); }
+}
+
+safeRun(setHeader);
+safeRun(renderQuickData);
+safeRun(tryDiscordOAuthCallback);
+safeRun(setupServerStatus);
+safeRun(setupLogin);
+safeRun(setupShop);
+safeRun(setupInventory);
+safeRun(setupCases);
+safeRun(setupLinking);
+safeRun(setupCheckout);
+safeRun(setupDashboard);
