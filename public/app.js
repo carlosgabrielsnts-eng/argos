@@ -247,25 +247,6 @@ async function finishDiscordImplicitLoginFromHash(){
 }
 
 function setupLogin(){
-  const oauthBtn = $('#discordOauthBtn');
-  const nextPath = localStorage.getItem('argos_redirect_after_login') || '/dashboard.html';
-
-  if(oauthBtn){
-    oauthBtn.addEventListener('click', () => {
-      const stateValue = createDiscordState();
-      sessionStorage.setItem('argos_discord_state', stateValue);
-      sessionStorage.setItem('argos_login_next', nextPath.startsWith('/') ? nextPath : `/${nextPath}`);
-      const url = new URL('https://discord.com/oauth2/authorize');
-      url.searchParams.set('response_type', 'token');
-      url.searchParams.set('client_id', CONFIG.discord.clientId);
-      url.searchParams.set('redirect_uri', CONFIG.discord.redirectUri);
-      url.searchParams.set('scope', CONFIG.discord.scope || 'identify email');
-      url.searchParams.set('state', stateValue);
-      url.searchParams.set('prompt', 'consent');
-      window.location.assign(url.toString());
-    });
-  }
-
   finishDiscordImplicitLoginFromHash();
 }
 
