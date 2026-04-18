@@ -52,17 +52,22 @@ app.get('/auth/discord/callback', async (req, res) => {
     const redirectUri = process.env.DISCORD_REDIRECT_URI || `${appBaseUrl(req)}/auth/discord/callback`;
     if (!clientId || !clientSecret) return res.status(400).send('Configure DISCORD_CLIENT_ID e DISCORD_CLIENT_SECRET no .env');
 
+    console.log('[Discord Auth] Code recebido:', code);
+    console.log('[Discord Auth] Redirect URI:', redirectUri);
+
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, grant_type: 'authorization_code', code, redirect_uri: redirectUri })
     });
     const tokenData = await tokenRes.json();
-    if (!tokenRes.ok) return res.status(400).send(`Erro Discord: ${JSON.stringify(tokenData)}`);
+    console.log('[Discord Auth] Token response:', tokenRes.status, tokenData);
+    if (!tokenRes.ok) return res.status(400).send(`Erro ao obter token: ${JSON.stringify(tokenData)}`);
 
     const meRes = await fetch('https://discord.com/api/v10/users/@me', { headers: { Authorization: `Bearer ${tokenData.access_token}` } });
     const me = await meRes.json();
-    if (!meRes.ok) return res.status(400).send(`Falha ao obter usuário do Discord: ${JSON.stringify(me)}`);
+    console.log('[Discord Auth] User data:', meRes.status, me);
+    if (!meRes.ok) return res.status(400).send(`Falha ao obter usuário: ${JSON.stringify(me)}`);
 
     const payload = {
       name: me.global_name || me.username,
@@ -78,8 +83,9 @@ app.get('/auth/discord/callback', async (req, res) => {
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.end(`<!DOCTYPE html><html><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.href='/dashboard.html';</script></body></html>`);
-  } catch {
-    res.status(500).send('Falha ao concluir login com Discord.');
+  } catch (err) {
+    console.error('[Discord Auth] Erro:', err);
+    res.status(500).send(`Falha ao concluir login: ${err.message}`);
   }
 });
 
