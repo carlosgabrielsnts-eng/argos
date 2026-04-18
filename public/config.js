@@ -5,7 +5,7 @@ window.CONFIG = {
   },
   discord: {
     clientId: "1489509789305405600",
-    redirectUri: "http://argosrj.onrender.com/auth/discord/callback.html",
+    redirectUri: "http://argosrj.onrender.com/auth/discord/callback",
     scope: "identify email"
   },
   mercadopago: {
