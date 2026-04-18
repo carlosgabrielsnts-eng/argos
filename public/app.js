@@ -244,7 +244,7 @@ function renderQuickData(){
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
   oauthBtn?.addEventListener('click', () => {
-    location.href = `${SERVER_BASE_URL}/auth/discord/login?next=${encodeURIComponent('/dashboard.html')}`;
+    location.href = '/auth/discord/login?next=' + encodeURIComponent('/dashboard.html');
   });
 }
 

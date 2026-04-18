@@ -1,8 +1,10 @@
+
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const cookieParser = require('cookie-parser');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -16,31 +18,33 @@ if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, JSON.stringify({ links: {
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 app.use(express.static(PUBLIC_DIR));
 
 const readDb = () => JSON.parse(fs.readFileSync(DB_FILE, 'utf-8'));
 const writeDb = (db) => fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
 
-function normalizeBaseUrl(raw, req) {
-  let value = (raw || '').trim();
-  if (!value) {
-    const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
-    value = `${proto}://${req.get('host')}`;
-  }
-  if (!/^https?:\/\//i.test(value)) value = `https://${value}`;
-  const url = new URL(value);
-  const isLocal = /^(localhost|127\.0\.0\.1)$/i.test(url.hostname);
-  if (!isLocal) url.protocol = 'https:';
-  return url.toString().replace(/\/$/, '');
+async function fetchCompat(...args) {
+  if (typeof fetch === 'function') return fetch(...args);
+  const mod = await import('node-fetch');
+  return mod.default(...args);
+}
+
+function inferBaseUrl(req) {
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'http').split(',')[0].trim();
+  return `${proto}://${req.get('host')}`.replace(/\/$/, '');
 }
 
 function getBaseUrl(req) {
-  return normalizeBaseUrl(process.env.APP_BASE_URL, req);
+  const raw = String(process.env.APP_BASE_URL || '').trim();
+  if (!raw) return inferBaseUrl(req);
+  return raw.replace(/\/$/, '');
 }
 
 function getRedirectUri(req) {
-  const raw = process.env.DISCORD_REDIRECT_URI || `${getBaseUrl(req)}/auth/discord/callback`;
-  return normalizeBaseUrl(raw, req);
+  const raw = String(process.env.DISCORD_REDIRECT_URI || '').trim();
+  if (raw) return raw;
+  return `${getBaseUrl(req)}/auth/discord/callback`;
 }
 
 function htmlEscape(value = '') {
@@ -61,11 +65,11 @@ function renderMessagePage(title, message, extra = '') {
 <title>${htmlEscape(title)}</title>
 <style>
 body{margin:0;font-family:Inter,Arial,sans-serif;background:#0d0f14;color:#f2f4f8;display:grid;min-height:100vh;place-items:center;padding:24px}
-.box{width:min(720px,100%);background:#141925;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.box{width:min(760px,100%);background:#141925;border:1px solid rgba(255,255,255,.08);border-radius:20px;padding:28px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
 h1{margin:0 0 12px;font-size:28px}p{margin:0 0 10px;color:#c7cfdb;line-height:1.6}.muted{font-size:13px;color:#8d99ae}.code{margin-top:16px;padding:14px;border-radius:14px;background:#0b0f18;border:1px solid rgba(255,255,255,.08);white-space:pre-wrap;word-break:break-word;color:#ffcf99}.btn{display:inline-block;margin-top:16px;padding:12px 16px;border-radius:12px;background:#ff7a18;color:#111;text-decoration:none;font-weight:700}
 </style>
 </head>
-<body><div class="box"><h1>${htmlEscape(title)}</h1><p>${htmlEscape(message)}</p>${extra}</div></body></html>`;
+<body><div class="box"><h1>${htmlEscape(title)}</h1><p>${htmlEscape(message)}</p>${extra}<a class="btn" href="/login.html">Voltar ao login</a></div></body></html>`;
 }
 
 async function readJsonSafe(response) {
@@ -78,7 +82,7 @@ async function readJsonSafe(response) {
 app.get('/api/server/status', async (req, res) => {
   try {
     if (process.env.STATUS_API_URL) {
-      const response = await fetch(process.env.STATUS_API_URL);
+      const response = await fetchCompat(process.env.STATUS_API_URL);
       const data = await response.json();
       return res.json(data);
     }
@@ -88,15 +92,8 @@ app.get('/api/server/status', async (req, res) => {
   }
 });
 
-app.get('/auth/discord/login', (req, res) => {
-  const clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
-  if (!clientId) return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID no ambiente do servidor.'));
-
-  const state = crypto.randomBytes(16).toString('hex');
-  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/dashboard.html';
-  res.cookie?.('argos_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
-  res.cookie?.('argos_oauth_next', next, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
-
+function buildDiscordAuthorizeUrl(req, state) {
+  const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
   const url = new URL('https://discord.com/oauth2/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('response_type', 'code');
@@ -104,36 +101,50 @@ app.get('/auth/discord/login', (req, res) => {
   url.searchParams.set('redirect_uri', getRedirectUri(req));
   url.searchParams.set('state', state);
   url.searchParams.set('prompt', 'consent');
-  res.redirect(url.toString());
+  return url.toString();
+}
+
+app.get(['/auth/discord/login','/auth/discord'], (req, res) => {
+  const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
+  if (!clientId) return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID no ambiente do servidor.'));
+
+  const state = crypto.randomBytes(16).toString('hex');
+  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/dashboard.html';
+  res.cookie('argos_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
+  res.cookie('argos_oauth_next', next, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
+  return res.redirect(buildDiscordAuthorizeUrl(req, state));
 });
 
 app.get('/auth/discord/callback', async (req, res) => {
   const code = req.query.code;
   const error = req.query.error;
   const errorDescription = req.query.error_description;
+  const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
+  const clientSecret = String(process.env.DISCORD_CLIENT_SECRET || '').trim();
+  const redirectUri = getRedirectUri(req);
+  const savedState = req.cookies?.argos_oauth_state;
+  const next = req.cookies?.argos_oauth_next || '/dashboard.html';
+
   if (error) {
     return res.status(400).send(renderMessagePage('Discord recusou o login', errorDescription || error));
   }
   if (!code) {
     return res.status(400).send(renderMessagePage('Código ausente', 'O Discord não retornou o código de autorização.'));
   }
-
-  const clientId = (process.env.DISCORD_CLIENT_ID || '').trim();
-  const clientSecret = (process.env.DISCORD_CLIENT_SECRET || '').trim();
-  const redirectUri = getRedirectUri(req);
   if (!clientId || !clientSecret) {
     return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID e DISCORD_CLIENT_SECRET no ambiente do servidor.'));
   }
+  if (savedState && req.query.state && savedState !== req.query.state) {
+    return res.status(400).send(renderMessagePage('State inválido', 'O retorno do Discord não corresponde ao state gerado pelo servidor.'));
+  }
 
   try {
-    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-    const tokenRes = await fetch('https://discord.com/api/v10/oauth2/token', {
+    const tokenRes = await fetchCompat('https://discord.com/api/v10/oauth2/token', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Authorization': `Basic ${basicAuth}`
-      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
         grant_type: 'authorization_code',
         code: String(code),
         redirect_uri: redirectUri
@@ -146,11 +157,11 @@ app.get('/auth/discord/callback', async (req, res) => {
       return res.status(400).send(renderMessagePage(
         'Falha ao concluir login',
         'O Discord não aceitou a troca do código por token.',
-        `<div class="code">${htmlEscape(detail || 'Resposta vazia do Discord.')}</div><div class="muted">Confira APP_BASE_URL, DISCORD_REDIRECT_URI, CLIENT_ID e CLIENT_SECRET.</div>`
+        `<div class="code">${htmlEscape(detail || 'Resposta vazia do Discord.')}</div><div class="muted">redirect_uri usado: ${htmlEscape(redirectUri)}</div>`
       ));
     }
 
-    const meRes = await fetch('https://discord.com/api/v10/users/@me', {
+    const meRes = await fetchCompat('https://discord.com/api/v10/users/@me', {
       headers: { Authorization: `Bearer ${tokenParsed.json.access_token}` }
     });
     const meParsed = await readJsonSafe(meRes);
@@ -172,11 +183,25 @@ app.get('/auth/discord/callback', async (req, res) => {
       gameLink: { gameId: '', code: '', status: 'idle', confirmed: false, requestedAt: '', confirmedAt: '' }
     };
 
+    res.clearCookie('argos_oauth_state');
+    res.clearCookie('argos_oauth_next');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrando...</title></head><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.replace('/dashboard.html');</script></body></html>`);
+    return res.end(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrando...</title></head><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.replace(${JSON.stringify(next)});</script></body></html>`);
   } catch (err) {
     console.error('Discord OAuth callback error:', err);
-    res.status(500).send(renderMessagePage('Falha ao concluir login', 'O servidor encontrou um erro durante o login com Discord.', `<div class="code">${htmlEscape(err?.message || 'Erro desconhecido.')}</div>`));
+    return res.status(500).send(renderMessagePage('Falha ao concluir login', 'O servidor encontrou um erro durante o login com Discord.', `<div class="code">${htmlEscape(err?.message || 'Erro desconhecido.')}</div>`));
+  }
+});
+
+app.get('/api/me', (req, res) => {
+  try {
+    const auth = req.headers.authorization || '';
+    if (auth.startsWith('Bearer ')) {
+      return res.json({ ok: true, mode: 'frontend-token' });
+    }
+    return res.status(401).json({ ok: false, message: 'Não autenticado' });
+  } catch {
+    return res.status(401).json({ ok: false, message: 'Não autenticado' });
   }
 });
 
@@ -213,13 +238,13 @@ app.post('/api/payments/create-preference', async (req, res) => {
     const order = { id: `ARG-${Date.now()}`, discordId: user.discordId, discordUser: user.discordUser, gameId: user.gameLink.gameId, email, items, coupon: coupon?.code || null, subtotal, discount, total, method: method || 'mercadopago', status: 'pending_payment', createdAt: new Date().toISOString() };
     db.orders.unshift(order); writeDb(db);
 
-    const accessToken = (process.env.MP_ACCESS_TOKEN || '').trim();
+    const accessToken = String(process.env.MP_ACCESS_TOKEN || '').trim();
     if (!accessToken) return res.json({ ok: true, orderId: order.id, message: 'Pedido salvo. Configure MP_ACCESS_TOKEN no ambiente para gerar o pagamento real.' });
 
     const preferenceItems = items.map((item) => ({ title: item.name, quantity: 1, unit_price: Number(item.price || 0), currency_id: 'BRL' }));
     if (discount > 0) preferenceItems.push({ title: `Cupom ${coupon.code}`, quantity: 1, unit_price: -Number(discount.toFixed(2)), currency_id: 'BRL' });
 
-    const prefRes = await fetch('https://api.mercadopago.com/checkout/preferences', {
+    const prefRes = await fetchCompat('https://api.mercadopago.com/checkout/preferences', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
       body: JSON.stringify({ items: preferenceItems, payer: { email }, external_reference: order.id, back_urls: { success: `${getBaseUrl(req)}/checkout.html#resumo-final`, failure: `${getBaseUrl(req)}/checkout.html#pagamento`, pending: `${getBaseUrl(req)}/checkout.html#resumo-final` }, auto_return: 'approved' })
@@ -234,7 +259,14 @@ app.post('/api/payments/create-preference', async (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, baseUrl: getBaseUrl(req), redirectUri: getRedirectUri(req) });
+  return res.json({
+    ok: true,
+    baseUrl: getBaseUrl(req),
+    redirectUri: getRedirectUri(req),
+    hasDiscordClientId: !!String(process.env.DISCORD_CLIENT_ID || '').trim(),
+    hasDiscordClientSecret: !!String(process.env.DISCORD_CLIENT_SECRET || '').trim(),
+    hasMpToken: !!String(process.env.MP_ACCESS_TOKEN || '').trim()
+  });
 });
 
 app.get('*', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
