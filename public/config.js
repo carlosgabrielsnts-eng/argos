@@ -1,11 +1,11 @@
 window.CONFIG = {
   app: {
     name: "Argos RJ",
-    serverBaseUrl: "http://argosrj.netlify.app"
+    serverBaseUrl: "http://argos.railway.app"
   },
   discord: {
     clientId: "1489509789305405600",
-    redirectUri: "http://argosrj.netlify.app/auth/discord/callback.html",
+    redirectUri: "http://argos.railway.app/auth/discord/callback.html",
     scope: "identify email"
   },
   mercadopago: {
