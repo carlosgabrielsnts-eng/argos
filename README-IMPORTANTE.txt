@@ -1,26 +1,22 @@
-ARGOS RJ - PACOTE COMPLETO
+Argos RJ v15
 
-LOGIN DO DISCORD:
-- agora usa login direto no navegador
-- não usa CLIENT_SECRET
-- não depende do callback do backend para entrar
-- no Discord Developer Portal, use este redirect:
-  http://argosrj.onrender.com/login.html
+O que foi corrigido:
+- callback legado /auth/discord/callback.html redireciona para /auth/discord/callback
+- login Discord usa rota backend real
+- cookies de state adaptam secure para http/https
+- data/*.json adicionados para conteúdo auxiliar
+- healthcheck em /api/health
 
-O QUE EDITAR:
-- public/config.js
-  - discord.clientId
-  - mercadopago.publicKey
-  - links.discordInvite, se quiser trocar
+Deploy:
+1. npm install
+2. configure .env
+3. npm start
 
-FIREBASE:
-- já vem com os dados enviados por você em config.js
+No Discord Developer Portal, use exatamente a mesma URL do DISCORD_REDIRECT_URI.
 
-MERCADO PAGO:
-- a parte visual do checkout está pronta
-- deixe a public key em config.js
-- a criação real do pagamento no backend continua separada
 
-BACKEND:
-- server.js continua no pacote para servir o site e APIs locais
-- o login do Discord do site não depende mais do server.js
+LOGIN DISCORD:
+- Esta versão usa o fluxo direto no navegador (implicit grant).
+- No Discord Developer Portal, configure a Redirect URL exatamente como: http://argosrj.onrender.com/login.html
+- O Client ID já está preenchido em public/config.js.
+- Não use callback.html nesta versão.

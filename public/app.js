@@ -2,7 +2,7 @@ const $ = (q, root=document) => root.querySelector(q);
 const $$ = (q, root=document) => [...root.querySelectorAll(q)];
 
 const state = {
-  user: null,
+  user: JSON.parse(localStorage.getItem('argos_user') || 'null'),
   cart: JSON.parse(localStorage.getItem('argos_cart_v6') || localStorage.getItem('argos_cart_v4') || '[]'),
   balance: Number(localStorage.getItem('argos_balance') || 0),
   boxesOwned: Number(localStorage.getItem('argos_boxes_owned') || 0),
@@ -30,82 +30,6 @@ const SERVER_BASE_URL = (APP_CONFIG.app?.serverBaseUrl && !/localhost/i.test(APP
 const DISCORD_INVITE = APP_CONFIG.links?.discordInvite || 'https://discord.gg/mtzEFsTJYw';
 
 
-function getDiscordBrowserAuth(){
-  try { return JSON.parse(localStorage.getItem('argos_discord_auth') || 'null'); }
-  catch { return null; }
-}
-function buildUserFromDiscordAuth(auth){
-  const user = auth?.user;
-  if(!user?.id) return null;
-  return {
-    name: user.global_name || user.username || 'Player Argos',
-    discordUser: user.username || 'discordplayer',
-    discordTag: user.discriminator && user.discriminator !== '0' ? user.discriminator : user.id,
-    role: 'Player Argos',
-    joined: String(new Date().getFullYear()),
-    avatar: user.avatar ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256` : buildInitials(user.global_name || user.username || 'Argos'),
-    discordId: user.id,
-    email: user.email || '',
-    gameLink: JSON.parse(localStorage.getItem('argos_game_link') || '{"gameId":"","code":"","status":"idle","confirmed":false,"requestedAt":"","confirmedAt":""}')
-  };
-}
-(function hydrateUserFromBrowserAuth(){
-  const auth = getDiscordBrowserAuth();
-  if(auth?.user?.id){
-    const built = buildUserFromDiscordAuth(auth);
-    if(built){
-      state.user = built;
-      localStorage.setItem('argos_user', JSON.stringify(built));
-    }
-  } else {
-    try { state.user = JSON.parse(localStorage.getItem('argos_user') || 'null'); } catch { state.user = null; }
-  }
-})();
-async function tryDiscordOAuthCallback(){
-  if(location.pathname.split('/').pop() !== 'login.html') return;
-  const hash = new URLSearchParams(location.hash.slice(1));
-  const token = hash.get('access_token');
-  if(!token) return;
-  const stateHash = hash.get('state');
-  const savedState = sessionStorage.getItem('argos_discord_state');
-  const notice = document.querySelector('.notice');
-  if(savedState && stateHash !== savedState){
-    if(notice) notice.textContent = 'Falha ao concluir login: state inválido.';
-    return;
-  }
-  try {
-    const res = await fetch('https://discord.com/api/v10/users/@me', {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
-    });
-    const text = await res.text();
-    let data = null;
-    try { data = JSON.parse(text); } catch {}
-    if(!res.ok || !data?.id) throw new Error(data?.message || 'Falha ao obter conta Discord.');
-    const payload = {
-      token,
-      tokenType: hash.get('token_type') || 'Bearer',
-      expiresIn: Number(hash.get('expires_in') || 0),
-      scope: hash.get('scope') || '',
-      user: data,
-      savedAt: Date.now()
-    };
-    localStorage.setItem('argos_discord_auth', JSON.stringify(payload));
-    const built = buildUserFromDiscordAuth(payload);
-    state.user = built;
-    localStorage.setItem('argos_user', JSON.stringify(built));
-    sessionStorage.removeItem('argos_discord_state');
-    history.replaceState({}, document.title, location.pathname);
-    const redirectTo = localStorage.getItem('argos_redirect_after_login') || 'dashboard.html';
-    localStorage.removeItem('argos_redirect_after_login');
-    if(notice) notice.textContent = 'Login concluído. Redirecionando para sua conta...';
-    setTimeout(()=> location.href = redirectTo, 600);
-  } catch (err) {
-    if(notice) notice.textContent = err.message || 'Falha ao concluir login com Discord.';
-  }
-}
-
-
-
 function ensureUserShape(){
   if(!state.user) return;
   state.user = {
@@ -130,7 +54,6 @@ ensureUserShape();
 function saveState(){
   ensureUserShape();
   localStorage.setItem('argos_user', JSON.stringify(state.user));
-  localStorage.setItem('argos_game_link', JSON.stringify(state.user?.gameLink || { gameId:'', code:'', status:'idle', confirmed:false, requestedAt:'', confirmedAt:'' }));
   localStorage.setItem('argos_cart_v6', JSON.stringify(state.cart));
   localStorage.setItem('argos_balance', String(state.balance));
   localStorage.setItem('argos_boxes_owned', String(state.boxesOwned));
@@ -185,9 +108,6 @@ function setHeader(){
       `;
       $('#logoutBtn')?.addEventListener('click', ()=>{
         state.user = null;
-        localStorage.removeItem('argos_user');
-        localStorage.removeItem('argos_discord_auth');
-        localStorage.removeItem('argos_game_link');
         saveState();
         location.href = 'index.html';
       });
@@ -248,28 +168,96 @@ function renderQuickData(){
   }
 }
 
+function createDiscordState(){
+  if(window.crypto?.getRandomValues){
+    const arr = new Uint8Array(16);
+    window.crypto.getRandomValues(arr);
+    return Array.from(arr).map(v => v.toString(16).padStart(2,'0')).join('');
+  }
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+async function finishDiscordImplicitLoginFromHash(){
+  if(!location.pathname.endsWith('/login.html') && !location.pathname.endsWith('login.html')) return;
+  const redirectHint = $('#redirectHint');
+  if(redirectHint) redirectHint.textContent = CONFIG.discord.redirectUri;
+
+  if(!location.hash || !location.hash.includes('access_token=')) return;
+
+  const loginStatus = $('#loginStatus');
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const accessToken = hash.get('access_token');
+  const stateValue = hash.get('state');
+  const savedState = sessionStorage.getItem('argos_discord_state');
+  const next = sessionStorage.getItem('argos_login_next') || '/dashboard.html';
+
+  if(loginStatus){
+    loginStatus.style.display = 'block';
+    loginStatus.textContent = 'Finalizando login com Discord...';
+  }
+
+  if(savedState && stateValue && savedState !== stateValue){
+    if(loginStatus) loginStatus.textContent = 'Falha ao concluir login: state inválido.';
+    return;
+  }
+  if(!accessToken){
+    if(loginStatus) loginStatus.textContent = 'Falha ao concluir login: token ausente.';
+    return;
+  }
+
+  try {
+    const meRes = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json'
+      }
+    });
+    const me = await meRes.json();
+    if(!meRes.ok || !me?.id){
+      throw new Error(me?.message || 'Não foi possível ler a conta do Discord.');
+    }
+
+    state.user = {
+      name: me.global_name || me.username,
+      discordUser: me.username,
+      discordTag: me.discriminator && me.discriminator !== '0' ? me.discriminator : me.id,
+      role: 'Player Argos',
+      joined: String(new Date().getFullYear()),
+      avatar: me.avatar ? `https://cdn.discordapp.com/avatars/${me.id}/${me.avatar}.png?size=256` : buildInitials(me.global_name || me.username || 'Argos'),
+      discordId: me.id,
+      email: me.email || '',
+      gameLink: state.user?.gameLink || { gameId: '', code: '', status: 'idle', confirmed: false, requestedAt: '', confirmedAt: '' }
+    };
+    saveState();
+    sessionStorage.removeItem('argos_discord_state');
+    sessionStorage.removeItem('argos_login_next');
+    history.replaceState({}, document.title, 'login.html');
+    location.replace(next);
+  } catch (err) {
+    if(loginStatus){
+      loginStatus.style.display = 'block';
+      loginStatus.textContent = `Falha ao concluir login: ${err.message}`;
+    }
+  }
+}
+
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
   oauthBtn?.addEventListener('click', () => {
-    const clientId = APP_CONFIG.discord?.clientId;
-    const redirectUri = APP_CONFIG.discord?.redirectUri || `${window.location.origin}/login.html`;
-    const scope = APP_CONFIG.discord?.scope || 'identify email';
-    if(!clientId){
-      alert('Client ID do Discord não configurado no config.js');
-      return;
-    }
-    const stateValue = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    const stateValue = createDiscordState();
     sessionStorage.setItem('argos_discord_state', stateValue);
-    const next = localStorage.getItem('argos_redirect_after_login') || 'dashboard.html';
-    localStorage.setItem('argos_redirect_after_login', next);
-    const authUrl = new URL('https://discord.com/oauth2/authorize');
-    authUrl.searchParams.set('response_type', 'token');
-    authUrl.searchParams.set('client_id', clientId);
-    authUrl.searchParams.set('redirect_uri', redirectUri);
-    authUrl.searchParams.set('scope', scope);
-    authUrl.searchParams.set('state', stateValue);
-    window.location.href = authUrl.toString();
+    sessionStorage.setItem('argos_login_next', '/dashboard.html');
+    const url = new URL('https://discord.com/oauth2/authorize');
+    url.searchParams.set('response_type', 'token');
+    url.searchParams.set('client_id', CONFIG.discord.clientId);
+    url.searchParams.set('redirect_uri', CONFIG.discord.redirectUri);
+    url.searchParams.set('scope', CONFIG.discord.scope || 'identify email');
+    url.searchParams.set('state', stateValue);
+    url.searchParams.set('prompt', 'consent');
+    location.href = url.toString();
   });
+
+  finishDiscordImplicitLoginFromHash();
 }
 
 

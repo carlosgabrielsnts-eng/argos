@@ -111,20 +111,13 @@ app.get('/api/server/status', async (req, res) => {
 });
 
 function buildDiscordAuthorizeUrl(req, state) {
-  const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
-  const url = new URL('https://discord.com/oauth2/authorize');
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'identify email');
-  url.searchParams.set('redirect_uri', getRedirectUri(req));
-  url.searchParams.set('state', state);
-  url.searchParams.set('prompt', 'consent');
+  const url = new URL(`${getBaseUrl(req)}/login.html`);
+  if (state) url.searchParams.set('oauth', state);
   return url.toString();
 }
 
 app.get('/auth/discord/callback.html', (req, res) => {
-  const qs = new URLSearchParams(req.query).toString();
-  return res.redirect(302, `/auth/discord/callback${qs ? `?${qs}` : ''}`);
+  return res.redirect(302, '/login.html');
 });
 
 app.get(['/auth/discord/login','/auth/discord'], (req, res) => {
@@ -136,7 +129,7 @@ app.get(['/auth/discord/login','/auth/discord'], (req, res) => {
   const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: useSecureCookie(req), maxAge: 10 * 60 * 1000, path: '/' };
   res.cookie('argos_oauth_state', state, cookieOptions);
   res.cookie('argos_oauth_next', next, cookieOptions);
-  return res.redirect(buildDiscordAuthorizeUrl(req, state));
+  return res.redirect('/login.html');
 });
 
 app.get('/auth/discord/callback', async (req, res) => {
