@@ -1,8 +1,15 @@
-IMPORTANTE
+Argos RJ v15
 
-1) No Discord Developer Portal, configure exatamente a mesma URL do DISCORD_REDIRECT_URI.
-2) No Render, preencha as variáveis do arquivo .env.example como Environment Variables.
-3) Depois de salvar, rode um novo deploy.
-4) Teste /api/health para confirmar o redirectUri calculado pelo servidor.
+O que foi corrigido:
+- callback legado /auth/discord/callback.html redireciona para /auth/discord/callback
+- login Discord usa rota backend real
+- cookies de state adaptam secure para http/https
+- data/*.json adicionados para conteúdo auxiliar
+- healthcheck em /api/health
 
-Se você trocou Client Secret, atualize também no Render.
+Deploy:
+1. npm install
+2. configure .env
+3. npm start
+
+No Discord Developer Portal, use exatamente a mesma URL do DISCORD_REDIRECT_URI.

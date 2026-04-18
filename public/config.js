@@ -9,7 +9,7 @@ window.CONFIG = {
     scope: "identify email"
   },
   mercadopago: {
-    publicKey: "APP_USR-8cc7e6c5-ac79-436a-bd73-b3d88a3eb10b"
+    publicKey: ""
   },
   firebase: {
     apiKey: "AIzaSyCXV_Z5VdS0RpKs9DvjSh60b4qsuxEGTbY",

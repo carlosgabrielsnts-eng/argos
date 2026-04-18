@@ -1,6 +1,6 @@
 {
   "name": "argos-rj-site",
-  "version": "12.4.0",
+  "version": "15.0.0",
   "private": true,
   "type": "commonjs",
   "scripts": {"start": "node server.js"},

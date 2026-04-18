@@ -6,12 +6,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const cookieParser = require('cookie-parser');
 
-// Debug: verificar se variáveis estão carregadas
-console.log('[ENV] DISCORD_CLIENT_ID:', process.env.DISCORD_CLIENT_ID ? '✓ Configurado' : '✗ NÃO CONFIGURADO');
-console.log('[ENV] DISCORD_CLIENT_SECRET:', process.env.DISCORD_CLIENT_SECRET ? '✓ Configurado' : '✗ NÃO CONFIGURADO');
-console.log('[ENV] APP_BASE_URL:', process.env.APP_BASE_URL || '✗ NÃO CONFIGURADO');
-console.log('[ENV] DISCORD_REDIRECT_URI:', process.env.DISCORD_REDIRECT_URI || '✗ NÃO CONFIGURADO');
-
 const app = express();
 app.set('trust proxy', 1);
 
@@ -49,8 +43,15 @@ function getBaseUrl(req) {
 
 function getRedirectUri(req) {
   const raw = String(process.env.DISCORD_REDIRECT_URI || '').trim();
-  if (raw) return raw;
+  if (raw) return raw.replace(/\/$/, '');
   return `${getBaseUrl(req)}/auth/discord/callback`;
+}
+
+function useSecureCookie(req) {
+  const explicit = String(process.env.DISCORD_REDIRECT_URI || process.env.APP_BASE_URL || '').trim();
+  if (explicit.startsWith('http://')) return false;
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || '').split(',')[0].trim();
+  return proto === 'https';
 }
 
 function htmlEscape(value = '') {
@@ -85,6 +86,17 @@ async function readJsonSafe(response) {
   return { text, json };
 }
 
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    baseUrl: getBaseUrl(req),
+    redirectUri: getRedirectUri(req),
+    hasClientId: !!String(process.env.DISCORD_CLIENT_ID || '').trim(),
+    hasClientSecret: !!String(process.env.DISCORD_CLIENT_SECRET || '').trim(),
+    secureCookie: useSecureCookie(req)
+  });
+});
+
 app.get('/api/server/status', async (req, res) => {
   try {
     if (process.env.STATUS_API_URL) {
@@ -110,14 +122,20 @@ function buildDiscordAuthorizeUrl(req, state) {
   return url.toString();
 }
 
+app.get('/auth/discord/callback.html', (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  return res.redirect(302, `/auth/discord/callback${qs ? `?${qs}` : ''}`);
+});
+
 app.get(['/auth/discord/login','/auth/discord'], (req, res) => {
   const clientId = String(process.env.DISCORD_CLIENT_ID || '').trim();
   if (!clientId) return res.status(400).send(renderMessagePage('Configuração ausente', 'Configure DISCORD_CLIENT_ID no ambiente do servidor.'));
 
   const state = crypto.randomBytes(16).toString('hex');
   const next = typeof req.query.next === 'string' && req.query.next.startsWith('/') ? req.query.next : '/dashboard.html';
-  res.cookie('argos_oauth_state', state, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
-  res.cookie('argos_oauth_next', next, { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 10 * 60 * 1000 });
+  const cookieOptions = { httpOnly: true, sameSite: 'lax', secure: useSecureCookie(req), maxAge: 10 * 60 * 1000, path: '/' };
+  res.cookie('argos_oauth_state', state, cookieOptions);
+  res.cookie('argos_oauth_next', next, cookieOptions);
   return res.redirect(buildDiscordAuthorizeUrl(req, state));
 });
 
@@ -147,7 +165,11 @@ app.get('/auth/discord/callback', async (req, res) => {
   try {
     const tokenRes = await fetchCompat('https://discord.com/api/v10/oauth2/token', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+        'User-Agent': 'ArgosRJ/1.0'
+      },
       body: new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
@@ -168,7 +190,11 @@ app.get('/auth/discord/callback', async (req, res) => {
     }
 
     const meRes = await fetchCompat('https://discord.com/api/v10/users/@me', {
-      headers: { Authorization: `Bearer ${tokenParsed.json.access_token}` }
+      headers: {
+        Authorization: `Bearer ${tokenParsed.json.access_token}`,
+        'Accept': 'application/json',
+        'User-Agent': 'ArgosRJ/1.0'
+      }
     });
     const meParsed = await readJsonSafe(meRes);
     if (!meRes.ok || !meParsed.json?.id) {
@@ -189,8 +215,8 @@ app.get('/auth/discord/callback', async (req, res) => {
       gameLink: { gameId: '', code: '', status: 'idle', confirmed: false, requestedAt: '', confirmedAt: '' }
     };
 
-    res.clearCookie('argos_oauth_state');
-    res.clearCookie('argos_oauth_next');
+    res.clearCookie('argos_oauth_state', { path: '/' });
+    res.clearCookie('argos_oauth_next', { path: '/' });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.end(`<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Entrando...</title></head><body><script>localStorage.setItem('argos_user', JSON.stringify(${JSON.stringify(payload)}));window.location.replace(${JSON.stringify(next)});</script></body></html>`);
   } catch (err) {
@@ -264,16 +290,6 @@ app.post('/api/payments/create-preference', async (req, res) => {
   }
 });
 
-app.get('/api/health', (req, res) => {
-  return res.json({
-    ok: true,
-    baseUrl: getBaseUrl(req),
-    redirectUri: getRedirectUri(req),
-    hasDiscordClientId: !!String(process.env.DISCORD_CLIENT_ID || '').trim(),
-    hasDiscordClientSecret: !!String(process.env.DISCORD_CLIENT_SECRET || '').trim(),
-    hasMpToken: !!String(process.env.MP_ACCESS_TOKEN || '').trim()
-  });
+app.listen(PORT, () => {
+  console.log(`Argos RJ online na porta ${PORT}`);
 });
-
-app.get('*', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'index.html')));
-app.listen(PORT, () => console.log(`Argos RJ rodando na porta ${PORT}`));

@@ -24,84 +24,11 @@ const skinPool = [
 const weightedPool = ['rare','rare','rare','rare','epic','epic','epic','legendary','legendary','mythic'];
 
 const APP_CONFIG = window.CONFIG || {};
-const DISCORD_OAUTH = {
-  clientId: localStorage.getItem('argos_discord_client_id') || APP_CONFIG.discord?.clientId || 'COLOQUE_SEU_CLIENT_ID',
-  redirectUri: localStorage.getItem('argos_discord_redirect_uri') || APP_CONFIG.discord?.redirectUri || `${location.origin}${location.pathname.includes('login.html') ? location.pathname : location.pathname.replace(/[^/]*$/, 'login.html')}`,
-  scope: APP_CONFIG.discord?.scope || 'identify',
-  apiBase: 'https://discord.com/api/v10'
-};
 const MERCADO_PAGO_CONFIG = APP_CONFIG.mercadopago || {};
 const FIREBASE_CONFIG = APP_CONFIG.firebase || {};
 const SERVER_BASE_URL = (APP_CONFIG.app?.serverBaseUrl && !/localhost/i.test(APP_CONFIG.app.serverBaseUrl) ? APP_CONFIG.app.serverBaseUrl : location.origin);
 const DISCORD_INVITE = APP_CONFIG.links?.discordInvite || 'https://discord.gg/mtzEFsTJYw';
 
-function randomState(size=24){
-  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let out = '';
-  for(let i=0;i<size;i++) out += chars[Math.floor(Math.random()*chars.length)];
-  return out;
-}
-function getDiscordAuthorizeUrl(){
-  const stateToken = randomState();
-  localStorage.setItem('argos_discord_oauth_state', stateToken);
-  const url = new URL('https://discord.com/oauth2/authorize');
-  url.searchParams.set('response_type', 'token');
-  url.searchParams.set('client_id', DISCORD_OAUTH.clientId);
-  url.searchParams.set('scope', DISCORD_OAUTH.scope);
-  url.searchParams.set('redirect_uri', DISCORD_OAUTH.redirectUri);
-  url.searchParams.set('state', stateToken);
-  url.searchParams.set('prompt', 'consent');
-  return url.toString();
-}
-function saveDiscordConfig(clientId, redirectUri){
-  if(clientId) localStorage.setItem('argos_discord_client_id', clientId.trim());
-  if(redirectUri) localStorage.setItem('argos_discord_redirect_uri', redirectUri.trim());
-}
-async function fetchDiscordMe(accessToken){
-  const res = await fetch(`${DISCORD_OAUTH.apiBase}/users/@me`, {
-    headers: { Authorization: `Bearer ${accessToken}` }
-  });
-  if(!res.ok) throw new Error('Falha ao obter dados da conta Discord.');
-  return res.json();
-}
-function avatarFromDiscord(user){
-  if(user.avatar && user.id) return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=256`;
-  return buildInitials(user.global_name || user.username || 'Argos');
-}
-async function tryDiscordOAuthCallback(){
-  if(!location.pathname.endsWith('login.html') || !location.hash.includes('access_token=')) return false;
-  const hash = new URLSearchParams(location.hash.slice(1));
-  const accessToken = hash.get('access_token');
-  const returnedState = hash.get('state');
-  const savedState = localStorage.getItem('argos_discord_oauth_state');
-  if(!accessToken || !returnedState || returnedState !== savedState){
-    alert('Falha na autenticação do Discord. Gere o login novamente.');
-    return false;
-  }
-  try {
-    const me = await fetchDiscordMe(accessToken);
-    state.user = {
-      name: me.global_name || me.username,
-      discordUser: me.username,
-      discordTag: me.discriminator && me.discriminator !== '0' ? me.discriminator : me.id,
-      role:'Player Argos',
-      joined:'2026',
-      avatar: avatarFromDiscord(me),
-      discordId: me.id,
-      gameLink: { gameId:'', code:'', status:'idle', confirmed:false, requestedAt:'', confirmedAt:'' }
-    };
-    saveState();
-    localStorage.removeItem('argos_discord_oauth_state');
-    history.replaceState({}, document.title, 'login.html');
-    const next = localStorage.getItem('argos_redirect_after_login') || 'dashboard.html';
-    localStorage.removeItem('argos_redirect_after_login');
-    location.href = next;
-    return true;
-  } catch(err){
-    alert(err.message || 'Não foi possível concluir o login Discord.');
-    return false;
-  }
-}
 
 function ensureUserShape(){
   if(!state.user) return;
@@ -244,7 +171,7 @@ function renderQuickData(){
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
   oauthBtn?.addEventListener('click', () => {
-    location.href = '/auth/discord/login?next=' + encodeURIComponent('/dashboard.html');
+    location.href = `${SERVER_BASE_URL}/auth/discord/login?next=` + encodeURIComponent('/dashboard.html');
   });
 }
 
