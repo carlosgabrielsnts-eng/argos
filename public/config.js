@@ -1,7 +1,7 @@
 window.CONFIG = {
   app: {
     name: "Argos RJ",
-    serverBaseUrl: "http://argosrj.onrender.com"
+    serverBaseUrl: "https://argosrj.onrender.com"
   },
   discord: {
     clientId: "1489509789305405600",
