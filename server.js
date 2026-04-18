@@ -8,7 +8,9 @@ const cookieParser = require('cookie-parser');
 
 // Debug: verificar se variáveis estão carregadas
 console.log('[ENV] DISCORD_CLIENT_ID:', process.env.DISCORD_CLIENT_ID ? '✓ Configurado' : '✗ NÃO CONFIGURADO');
+console.log('[ENV] DISCORD_CLIENT_SECRET:', process.env.DISCORD_CLIENT_SECRET ? '✓ Configurado' : '✗ NÃO CONFIGURADO');
 console.log('[ENV] APP_BASE_URL:', process.env.APP_BASE_URL || '✗ NÃO CONFIGURADO');
+console.log('[ENV] DISCORD_REDIRECT_URI:', process.env.DISCORD_REDIRECT_URI || '✗ NÃO CONFIGURADO');
 
 const app = express();
 app.set('trust proxy', 1);
