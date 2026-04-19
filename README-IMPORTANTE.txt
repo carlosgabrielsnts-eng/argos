@@ -15,13 +15,7 @@ Deploy:
 No Discord Developer Portal, use exatamente a mesma URL do DISCORD_REDIRECT_URI.
 
 
-LOGIN DISCORD:
-- Esta versão usa o fluxo direto no navegador (implicit grant).
-- No Discord Developer Portal, configure a Redirect URL exatamente como: http://argosrj.onrender.com/login.html
-- O Client ID já está preenchido em public/config.js.
-- Não use callback.html nesta versão.
-
-
-Correção v16.1:
-- Corrigido erro de inicialização do app.js (função ausente)
-- Login Discord com fallback por link direto
+Versão v17:
+- Login padronizado no backend
+- Callback usada: http://argosrj.onrender.com/auth/discord/callback
+- Botão simplificado para Login com Discord
