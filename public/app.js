@@ -168,11 +168,26 @@ function renderQuickData(){
   }
 }
 
+
+function tryDiscordOAuthCallback(){
+  // fluxo atual usa callback no backend; não há processamento no frontend aqui
+  return;
+}
+
 function setupLogin(){
   const oauthBtn = $('#discordOauthBtn');
-  oauthBtn?.addEventListener('click', () => {
-    location.href = `${SERVER_BASE_URL}/auth/discord/login?next=` + encodeURIComponent('/dashboard.html');
+  if(!oauthBtn) return;
+
+  const target = `${SERVER_BASE_URL}/auth/discord/login?next=` + encodeURIComponent('/dashboard.html');
+
+  oauthBtn.addEventListener('click', (e) => {
+    e.preventDefault();
+    window.location.href = target;
   });
+
+  if(oauthBtn.tagName === 'A'){
+    oauthBtn.setAttribute('href', target);
+  }
 }
 
 
@@ -817,14 +832,18 @@ if(document.body.dataset.private === 'true' && !isLogged()){
   location.href = 'login.html';
 }
 
-setHeader();
-renderQuickData();
-tryDiscordOAuthCallback();
-setupServerStatus();
-setupLogin();
-setupShop();
-setupInventory();
-setupCases();
-setupLinking();
-setupCheckout();
-setupDashboard();
+function safeInit(fn){
+  try { fn(); } catch(err) { console.error('Argos init error:', err); }
+}
+
+safeInit(setHeader);
+safeInit(renderQuickData);
+safeInit(tryDiscordOAuthCallback);
+safeInit(setupServerStatus);
+safeInit(setupLogin);
+safeInit(setupShop);
+safeInit(setupInventory);
+safeInit(setupCases);
+safeInit(setupLinking);
+safeInit(setupCheckout);
+safeInit(setupDashboard);
